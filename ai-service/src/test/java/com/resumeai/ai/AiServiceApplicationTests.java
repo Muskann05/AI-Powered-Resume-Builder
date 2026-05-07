@@ -1,0 +1,11 @@
+package com.resumeai.ai;
+
+import org.junit.jupiter.api.Test;
+
+class AiServiceApplicationTests {
+
+	@Test
+	void contextLoads() {
+	}
+
+}
