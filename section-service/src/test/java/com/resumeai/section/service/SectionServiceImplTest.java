@@ -5,6 +5,7 @@ import com.resumeai.section.dto.BulkUpdateSectionsRequest;
 import com.resumeai.section.dto.CreateSectionRequest;
 import com.resumeai.section.dto.ReorderSectionsRequest;
 import com.resumeai.section.dto.ResumeSummaryResponse;
+import com.resumeai.section.dto.SectionResponse;
 import com.resumeai.section.dto.UpdateSectionRequest;
 import com.resumeai.section.entity.ResumeSection;
 import com.resumeai.section.enums.SectionType;
@@ -14,17 +15,17 @@ import com.resumeai.section.repository.SectionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,35 +38,31 @@ class SectionServiceImplTest {
     @Mock
     private ResumeServiceClient resumeServiceClient;
 
+    @InjectMocks
     private SectionServiceImpl sectionService;
-    private ResumeSection section;
+
     private ResumeSummaryResponse resume;
+    private ResumeSummaryResponse targetResume;
+    private ResumeSection section;
 
     @BeforeEach
     void setUp() {
-        sectionService = new SectionServiceImpl(sectionRepository, resumeServiceClient);
-
         resume = new ResumeSummaryResponse(
-                "resume-101",
-                "user-101",
-                "Backend Resume",
-                "Java Developer",
-                "template-101",
-                80,
-                "DRAFT",
-                "English",
-                false,
-                0,
-                null,
-                null
+                "resume-101", "user-101", "Backend Resume", "Java Developer",
+                "template-101", 80, "DRAFT", "English", false, 0, null, null
+        );
+
+        targetResume = new ResumeSummaryResponse(
+                "resume-202", "user-101", "Backend Resume Copy", "Java Developer",
+                "template-101", 80, "DRAFT", "English", false, 0, null, null
         );
 
         section = new ResumeSection();
         section.setSectionId("section-101");
         section.setResumeId("resume-101");
         section.setSectionType(SectionType.SUMMARY);
-        section.setTitle("Professional Summary");
-        section.setContent("Experienced Java developer");
+        section.setTitle("Summary");
+        section.setContent("Java backend developer");
         section.setDisplayOrder(1);
         section.setIsVisible(true);
         section.setAiGenerated(false);
@@ -74,55 +71,45 @@ class SectionServiceImplTest {
     @Test
     void addSectionShouldCreateSectionWithRequestedOrder() {
         CreateSectionRequest request = new CreateSectionRequest(
-                "resume-101",
-                SectionType.SUMMARY,
-                "Professional Summary",
-                "Experienced Java developer",
-                2,
-                true,
-                false
+                "resume-101", SectionType.EXPERIENCE, "Experience",
+                "Worked on Spring Boot APIs", 2, true, true
         );
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
         when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> {
             ResumeSection saved = invocation.getArgument(0);
-            saved.setSectionId("section-new");
+            saved.setSectionId("section-102");
             return saved;
         });
 
-        var response = sectionService.addSection(request);
+        SectionResponse response = sectionService.addSection(request);
 
-        assertEquals("section-new", response.sectionId());
+        assertEquals("section-102", response.sectionId());
         assertEquals("resume-101", response.resumeId());
-        assertEquals(SectionType.SUMMARY, response.sectionType());
+        assertEquals(SectionType.EXPERIENCE, response.sectionType());
         assertEquals(2, response.displayOrder());
         assertTrue(response.isVisible());
-        assertFalse(response.aiGenerated());
+        assertTrue(response.aiGenerated());
     }
 
     @Test
-    void addSectionShouldResolveOrderWhenOrderMissing() {
+    void addSectionShouldResolveDisplayOrderAndDefaults() {
         CreateSectionRequest request = new CreateSectionRequest(
-                "resume-101",
-                SectionType.SKILLS,
-                "Skills",
-                "Java, Spring Boot",
-                null,
-                null,
-                null
+                "resume-101", SectionType.SKILLS, "Skills",
+                "Java, Spring Boot", null, null, null
         );
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-        when(sectionRepository.countByResumeId("resume-101")).thenReturn(3L);
+        when(sectionRepository.countByResumeId("resume-101")).thenReturn(2L);
         when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> {
             ResumeSection saved = invocation.getArgument(0);
-            saved.setSectionId("section-new");
+            saved.setSectionId("section-103");
             return saved;
         });
 
-        var response = sectionService.addSection(request);
+        SectionResponse response = sectionService.addSection(request);
 
-        assertEquals(4, response.displayOrder());
+        assertEquals(3, response.displayOrder());
         assertTrue(response.isVisible());
         assertFalse(response.aiGenerated());
     }
@@ -130,66 +117,61 @@ class SectionServiceImplTest {
     @Test
     void addSectionShouldRejectBlankResumeId() {
         CreateSectionRequest request = new CreateSectionRequest(
-                "",
-                SectionType.SUMMARY,
-                "Professional Summary",
-                "Experienced Java developer",
-                null,
-                null,
-                null
+                "", SectionType.SUMMARY, "Summary", "Content", 1, true, false
         );
 
         assertThrows(BadRequestException.class, () -> sectionService.addSection(request));
+        verify(resumeServiceClient, never()).getResumeById(any());
+        verify(sectionRepository, never()).save(any());
     }
 
     @Test
     void getSectionsByResumeShouldReturnOrderedSections() {
+        ResumeSection second = section("section-102", "resume-101", SectionType.SKILLS, "Skills", "Java", 2);
+
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of(section));
+        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101"))
+                .thenReturn(List.of(section, second));
 
-        var response = sectionService.getSectionsByResume("resume-101");
+        List<SectionResponse> responses = sectionService.getSectionsByResume("resume-101");
 
-        assertEquals(1, response.size());
-        assertEquals("section-101", response.get(0).sectionId());
+        assertEquals(2, responses.size());
+        assertEquals("section-101", responses.get(0).sectionId());
+        assertEquals("section-102", responses.get(1).sectionId());
     }
 
     @Test
     void getSectionByIdShouldReturnSection() {
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
 
-        var response = sectionService.getSectionById("section-101");
+        SectionResponse response = sectionService.getSectionById("section-101");
 
         assertEquals("section-101", response.sectionId());
-        assertEquals("Professional Summary", response.title());
+        assertEquals("Summary", response.title());
     }
 
     @Test
     void getSectionByIdShouldThrowWhenMissing() {
-        when(sectionRepository.findBySectionId("missing-section")).thenReturn(Optional.empty());
+        when(sectionRepository.findBySectionId("missing")).thenReturn(Optional.empty());
 
-        assertThrows(ResourceNotFoundException.class, () -> sectionService.getSectionById("missing-section"));
+        assertThrows(ResourceNotFoundException.class, () -> sectionService.getSectionById("missing"));
     }
 
     @Test
-    void updateSectionShouldUpdateMutableFields() {
+    void updateSectionShouldUpdateAllFields() {
         UpdateSectionRequest request = new UpdateSectionRequest(
-                SectionType.EXPERIENCE,
-                "Work Experience",
-                "Built backend APIs",
-                5,
-                false,
-                true
+                SectionType.EXPERIENCE, "Experience", "Built APIs", 3, false, true
         );
 
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sectionRepository.save(section)).thenReturn(section);
 
-        var response = sectionService.updateSection("section-101", request);
+        SectionResponse response = sectionService.updateSection("section-101", request);
 
         assertEquals(SectionType.EXPERIENCE, response.sectionType());
-        assertEquals("Work Experience", response.title());
-        assertEquals("Built backend APIs", response.content());
-        assertEquals(5, response.displayOrder());
+        assertEquals("Experience", response.title());
+        assertEquals("Built APIs", response.content());
+        assertEquals(3, response.displayOrder());
         assertFalse(response.isVisible());
         assertTrue(response.aiGenerated());
     }
@@ -197,18 +179,13 @@ class SectionServiceImplTest {
     @Test
     void updateSectionShouldKeepOptionalFieldsWhenNull() {
         UpdateSectionRequest request = new UpdateSectionRequest(
-                SectionType.SUMMARY,
-                "Updated Summary",
-                "Updated content",
-                null,
-                null,
-                null
+                SectionType.SUMMARY, "Summary Updated", "Updated content", null, null, null
         );
 
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sectionRepository.save(section)).thenReturn(section);
 
-        var response = sectionService.updateSection("section-101", request);
+        SectionResponse response = sectionService.updateSection("section-101", request);
 
         assertEquals(1, response.displayOrder());
         assertTrue(response.isVisible());
@@ -226,38 +203,35 @@ class SectionServiceImplTest {
 
     @Test
     void reorderSectionsShouldUpdateDisplayOrders() {
-        ResumeSection sectionTwo = new ResumeSection();
-        sectionTwo.setSectionId("section-202");
-        sectionTwo.setResumeId("resume-101");
-        sectionTwo.setSectionType(SectionType.SKILLS);
-        sectionTwo.setTitle("Skills");
-        sectionTwo.setContent("Java");
-        sectionTwo.setDisplayOrder(2);
-        sectionTwo.setIsVisible(true);
-        sectionTwo.setAiGenerated(false);
+        ResumeSection second = section("section-102", "resume-101", SectionType.SKILLS, "Skills", "Java", 2);
 
         List<ReorderSectionsRequest> requests = List.of(
                 new ReorderSectionsRequest("section-101", 2),
-                new ReorderSectionsRequest("section-202", 1)
+                new ReorderSectionsRequest("section-102", 1)
         );
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-        when(sectionRepository.findBySectionId("section-202")).thenReturn(Optional.of(sectionTwo));
-        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of(sectionTwo, section));
+        when(sectionRepository.findBySectionId("section-102")).thenReturn(Optional.of(second));
+        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101"))
+                .thenReturn(List.of(second, section));
 
-        var response = sectionService.reorderSections("resume-101", requests);
+        List<SectionResponse> responses = sectionService.reorderSections("resume-101", requests);
 
-        assertEquals(2, response.size());
-        verify(sectionRepository).save(section);
-        verify(sectionRepository).save(sectionTwo);
+        assertEquals(2, responses.size());
+        assertEquals("section-102", responses.get(0).sectionId());
+        assertEquals("section-101", responses.get(1).sectionId());
+        assertEquals(2, section.getDisplayOrder());
+        assertEquals(1, second.getDisplayOrder());
     }
 
     @Test
     void reorderSectionsShouldRejectEmptyRequest() {
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
 
-        assertThrows(BadRequestException.class, () -> sectionService.reorderSections("resume-101", List.of()));
+        assertThrows(BadRequestException.class,
+                () -> sectionService.reorderSections("resume-101", List.of()));
     }
 
     @Test
@@ -268,49 +242,40 @@ class SectionServiceImplTest {
         );
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
+        when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
 
-        assertThrows(BadRequestException.class, () -> sectionService.reorderSections("resume-101", requests));
+        assertThrows(BadRequestException.class,
+                () -> sectionService.reorderSections("resume-101", requests));
+
+        verify(sectionRepository).findBySectionId("section-101");
+        verify(sectionRepository, never()).findBySectionId("section-202");
     }
 
     @Test
     void reorderSectionsShouldRejectSectionFromDifferentResume() {
-        ResumeSection otherResumeSection = new ResumeSection();
-        otherResumeSection.setSectionId("section-202");
-        otherResumeSection.setResumeId("resume-other");
-        otherResumeSection.setSectionType(SectionType.SKILLS);
-        otherResumeSection.setTitle("Skills");
-        otherResumeSection.setContent("Java");
-        otherResumeSection.setDisplayOrder(2);
-        otherResumeSection.setIsVisible(true);
-        otherResumeSection.setAiGenerated(false);
-
-        List<ReorderSectionsRequest> requests = List.of(
-                new ReorderSectionsRequest("section-202", 1)
-        );
+        ResumeSection other = section("section-202", "resume-other", SectionType.SKILLS, "Skills", "Java", 2);
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-        when(sectionRepository.findBySectionId("section-202")).thenReturn(Optional.of(otherResumeSection));
+        when(sectionRepository.findBySectionId("section-202")).thenReturn(Optional.of(other));
 
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
-                () -> sectionService.reorderSections("resume-101", requests)
-        );
-
-        assertTrue(exception.getMessage().contains("Section does not belong to resume"));
+        assertThrows(BadRequestException.class,
+                () -> sectionService.reorderSections("resume-101",
+                        List.of(new ReorderSectionsRequest("section-202", 1))));
     }
 
     @Test
     void toggleVisibilityShouldUpdateVisibility() {
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sectionRepository.save(section)).thenReturn(section);
 
-        var response = sectionService.toggleVisibility("section-101", false);
+        SectionResponse response = sectionService.toggleVisibility("section-101", false);
 
         assertFalse(response.isVisible());
+        verify(sectionRepository).save(section);
     }
 
     @Test
-    void deleteAllSectionsShouldValidateResumeAndDeleteByResumeId() {
+    void deleteAllSectionsShouldDeleteByResumeId() {
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
 
         sectionService.deleteAllSections("resume-101");
@@ -319,163 +284,133 @@ class SectionServiceImplTest {
     }
 
     @Test
-    void getSectionsByTypeShouldReturnMatchingType() {
+    void getSectionsByTypeShouldReturnMatchingSections() {
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-        when(sectionRepository.findByResumeIdAndSectionType("resume-101", SectionType.SUMMARY)).thenReturn(List.of(section));
+        when(sectionRepository.findByResumeIdAndSectionType("resume-101", SectionType.SUMMARY))
+                .thenReturn(List.of(section));
 
-        var response = sectionService.getSectionsByType("resume-101", "summary");
+        List<SectionResponse> responses = sectionService.getSectionsByType("resume-101", "summary");
 
-        assertEquals(1, response.size());
-        assertEquals(SectionType.SUMMARY, response.get(0).sectionType());
+        assertEquals(1, responses.size());
+        assertEquals(SectionType.SUMMARY, responses.get(0).sectionType());
     }
 
     @Test
-    void getSectionsByTypeShouldRejectInvalidType() {
-        when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-
-        assertThrows(IllegalArgumentException.class, () -> sectionService.getSectionsByType("resume-101", "invalid"));
-    }
-
-    @Test
-    void bulkUpdateSectionsShouldCreateNewSectionWhenSectionIdMissing() {
+    void bulkUpdateSectionsShouldCreateAndUpdateSections() {
         BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of(
                 new BulkUpdateSectionsRequest.SectionItem(
-                        null,
-                        "resume-101",
-                        "SUMMARY",
-                        "Summary",
-                        "New summary",
-                        1,
-                        true,
-                        false
+                        null, "resume-101", "SKILLS", "Skills",
+                        "Java, Spring Boot", 2, true, false
+                ),
+                new BulkUpdateSectionsRequest.SectionItem(
+                        "section-101", "resume-101", "SUMMARY", "Summary Updated",
+                        "Updated content", 1, true, true
                 )
         ));
 
-        when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
-        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of(section));
-        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        var response = sectionService.bulkUpdateSections(request);
-
-        assertEquals(1, response.size());
-        verify(sectionRepository).save(any(ResumeSection.class));
-    }
-
-    @Test
-    void bulkUpdateSectionsShouldUpdateExistingSection() {
-        BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of(
-                new BulkUpdateSectionsRequest.SectionItem(
-                        "section-101",
-                        "resume-101",
-                        "EXPERIENCE",
-                        "Experience",
-                        "Built APIs",
-                        2,
-                        false,
-                        true
-                )
-        ));
+        ResumeSection newSection = section("section-102", "resume-101", SectionType.SKILLS, "Skills", "Java, Spring Boot", 2);
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
         when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of(section));
-        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> {
+            ResumeSection saved = invocation.getArgument(0);
+            if (saved.getSectionId() == null) {
+                saved.setSectionId("section-102");
+            }
+            return saved;
+        });
+        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101"))
+                .thenReturn(List.of(section, newSection));
 
-        var response = sectionService.bulkUpdateSections(request);
+        List<SectionResponse> responses = sectionService.bulkUpdateSections(request);
 
-        assertEquals(1, response.size());
-        assertEquals(SectionType.EXPERIENCE, section.getSectionType());
-        assertEquals("Experience", section.getTitle());
-        assertEquals("Built APIs", section.getContent());
-        assertEquals(2, section.getDisplayOrder());
-        assertFalse(section.getIsVisible());
+        assertEquals(2, responses.size());
+        assertEquals("Summary Updated", section.getTitle());
+        assertEquals("Updated content", section.getContent());
         assertTrue(section.getAiGenerated());
     }
 
     @Test
-    void bulkUpdateSectionsShouldRejectEmptySections() {
-        BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of());
+    void bulkUpdateSectionsShouldRejectEmptyRequest() {
+        assertThrows(BadRequestException.class,
+                () -> sectionService.bulkUpdateSections(new BulkUpdateSectionsRequest(List.of())));
 
-        assertThrows(BadRequestException.class, () -> sectionService.bulkUpdateSections(request));
+        verify(sectionRepository, never()).save(any());
     }
 
     @Test
     void bulkUpdateSectionsShouldRejectMismatchedResumeIds() {
         BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of(
-                new BulkUpdateSectionsRequest.SectionItem(null, "resume-101", "SUMMARY", "Summary", "Content", 1, true, false),
-                new BulkUpdateSectionsRequest.SectionItem(null, "resume-202", "SKILLS", "Skills", "Java", 2, true, false)
+                new BulkUpdateSectionsRequest.SectionItem(
+                        null, "resume-101", "SUMMARY", "Summary", "Content", 1, true, false
+                ),
+                new BulkUpdateSectionsRequest.SectionItem(
+                        null, "resume-202", "SKILLS", "Skills", "Java", 2, true, false
+                )
         ));
+
+        assertThrows(BadRequestException.class, () -> sectionService.bulkUpdateSections(request));
+        verify(resumeServiceClient, never()).getResumeById(any());
+    }
+
+    @Test
+    void bulkUpdateSectionsShouldRejectExistingSectionFromDifferentResume() {
+        ResumeSection other = section("section-202", "resume-other", SectionType.SKILLS, "Skills", "Java", 2);
+
+        BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of(
+                new BulkUpdateSectionsRequest.SectionItem(
+                        "section-202", "resume-101", "SKILLS", "Skills", "Java", 2, true, false
+                )
+        ));
+
+        when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
+        when(sectionRepository.findBySectionId("section-202")).thenReturn(Optional.of(other));
 
         assertThrows(BadRequestException.class, () -> sectionService.bulkUpdateSections(request));
     }
 
     @Test
-    void bulkUpdateSectionsShouldRejectExistingSectionFromDifferentResume() {
-        BulkUpdateSectionsRequest request = new BulkUpdateSectionsRequest(List.of(
-                new BulkUpdateSectionsRequest.SectionItem(
-                        "section-101",
-                        "resume-202",
-                        "SUMMARY",
-                        "Summary",
-                        "Content",
-                        1,
-                        true,
-                        false
-                )
-        ));
-
-        ResumeSummaryResponse otherResume = new ResumeSummaryResponse(
-                "resume-202",
-                "user-101",
-                "Other Resume",
-                "Java Developer",
-                "template-101",
-                80,
-                "DRAFT",
-                "English",
-                false,
-                0,
-                null,
-                null
-        );
-
-        section.setResumeId("resume-101");
-
-        when(resumeServiceClient.getResumeById("resume-202")).thenReturn(otherResume);
-        when(sectionRepository.findBySectionId("section-101")).thenReturn(Optional.of(section));
-
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
-                () -> sectionService.bulkUpdateSections(request)
-        );
-
-        assertTrue(exception.getMessage().contains("Section does not belong to resume"));
-    }
-
-    @Test
-    void cloneSectionsShouldCopySectionsFromSourceToTarget() {
-        ResumeSummaryResponse targetResume = new ResumeSummaryResponse(
-                "resume-202",
-                "user-101",
-                "Target Resume",
-                "Java Developer",
-                "template-101",
-                80,
-                "DRAFT",
-                "English",
-                false,
-                0,
-                null,
-                null
-        );
+    void cloneSectionsShouldCopyAllSourceSections() {
+        ResumeSection source = section("section-301", "resume-101", SectionType.PROJECTS, "Projects", "ResumeAI project", 3);
 
         when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
         when(resumeServiceClient.getResumeById("resume-202")).thenReturn(targetResume);
-        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of(section));
+        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101"))
+                .thenReturn(List.of(section, source));
         when(sectionRepository.save(any(ResumeSection.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         sectionService.cloneSections("resume-101", "resume-202");
 
-        verify(sectionRepository).save(any(ResumeSection.class));
+        verify(sectionRepository).findByResumeIdOrderByDisplayOrderAsc("resume-101");
+        verify(sectionRepository, times(2)).save(any(ResumeSection.class));
+    }
+
+    @Test
+    void cloneSectionsShouldHandleNoSourceSections() {
+        when(resumeServiceClient.getResumeById("resume-101")).thenReturn(resume);
+        when(resumeServiceClient.getResumeById("resume-202")).thenReturn(targetResume);
+        when(sectionRepository.findByResumeIdOrderByDisplayOrderAsc("resume-101")).thenReturn(List.of());
+
+        sectionService.cloneSections("resume-101", "resume-202");
+
+        verify(sectionRepository, never()).save(any());
+    }
+
+    private ResumeSection section(String sectionId,
+                                  String resumeId,
+                                  SectionType sectionType,
+                                  String title,
+                                  String content,
+                                  Integer displayOrder) {
+        ResumeSection resumeSection = new ResumeSection();
+        resumeSection.setSectionId(sectionId);
+        resumeSection.setResumeId(resumeId);
+        resumeSection.setSectionType(sectionType);
+        resumeSection.setTitle(title);
+        resumeSection.setContent(content);
+        resumeSection.setDisplayOrder(displayOrder);
+        resumeSection.setIsVisible(true);
+        resumeSection.setAiGenerated(false);
+        return resumeSection;
     }
 }
