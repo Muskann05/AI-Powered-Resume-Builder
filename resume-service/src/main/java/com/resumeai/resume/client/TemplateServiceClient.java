@@ -6,7 +6,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 
-@FeignClient(name = "${template.service.name}")
+@FeignClient(name = "template-service", url = "${template.service.url}")
 public interface TemplateServiceClient {
 
     @GetMapping("/templates/{templateId}/validate-access/{userId}")

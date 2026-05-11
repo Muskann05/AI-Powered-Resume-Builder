@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.List;
 
-@FeignClient(name = "${section.service.name}")
+@FeignClient(name = "section-service", url = "${section.service.url}")
 public interface SectionServiceClient {
 
     @GetMapping("/sections/resume/{resumeId}")
