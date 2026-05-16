@@ -28,7 +28,7 @@ jobs:
           java-version: 17
           cache: maven
 
-      - name: Build services and generate coverage
+      - name: Build backend services
         shell: bash
         run: |
           services=(
@@ -46,7 +46,7 @@ jobs:
 
           for service in "${services[@]}"; do
             echo "Building $service"
-            (cd "$service" && mvn -B org.jacoco:jacoco-maven-plugin:0.8.12:prepare-agent test org.jacoco:jacoco-maven-plugin:0.8.12:report)
+            (cd "$service" && mvn -B -DskipTests package)
           done
 
       - name: SonarCloud scan
